@@ -1,149 +1,195 @@
 name: Electron Release
 
 on:
-    workflow_dispatch:
-        inputs:
-            build_macos_aarch64:
-                description: 'Build for macOS aarch64 (Apple Silicon)'
-                required: false
-                type: boolean
-                default: false
-            build_macos_x86_64:
-                description: 'Build for macOS x86_64 (Intel)'
-                required: false
-                type: boolean
-                default: false
-            build_linux_x86_64:
-                description: 'Build for Linux x86_64'
-                required: false
-                type: boolean
-                default: false
-            build_linux_aarch64:
-                description: 'Build for Linux aarch64'
-                required: false
-                type: boolean
-                default: false
-            build_windows_x86_64:
-                description: 'Build for Windows x86_64'
-                required: false
-                type: boolean
-                default: false
-            build_windows_aarch64:
-                description: 'Build for Windows aarch64'
-                required: false
-                type: boolean
-                default: false
     push:
         tags:
-            - 'v*'
+            - 'worker*'
 
 jobs:
+    setup:
+        runs-on: ubuntu-latest
+
+        outputs:
+            matrix: ${{ steps.matrix.outputs.matrix }}
+
+        steps:
+            - name: Generate Matrix
+              id: matrix
+              shell: bash
+              run: |
+                  TAG="${GITHUB_REF_NAME}"
+
+                  MATRIX='{"include":[]}'
+
+                  add_platform() {
+                    local PLATFORM="$1"
+                    local ARCH="$2"
+                    local BUILD_ARGS="$3"
+                    local TARGET="$4"
+                    local ARTIFACT="$5"
+
+                    MATRIX=$(jq \
+                      --arg platform "$PLATFORM" \
+                      --arg arch "$ARCH" \
+                      --arg build_args "$BUILD_ARGS" \
+                      --arg electron_target "$TARGET" \
+                      --arg artifact_name "$ARTIFACT" \
+                      '.include += [{
+                        platform:$platform,
+                        arch:$arch,
+                        build_args:$build_args,
+                        electron_target:$electron_target,
+                        artifact_name:$artifact_name
+                      }]' <<< "$MATRIX")
+                  }
+
+                  ########################################
+                  # electron-all
+                  ########################################
+
+                  if [[ "$TAG" == "electron-all" ]]; then
+
+                    add_platform "macos-latest" "arm64" "--arm64" "--mac" "macos-aarch64"
+                    add_platform "macos-latest" "x64" "--x64" "--mac" "macos-x86_64"
+
+                    add_platform "ubuntu-22.04" "x64" "--x64" "--linux" "linux-x86_64"
+                    add_platform "ubuntu-22.04" "arm64" "--arm64" "--linux" "linux-aarch64"
+
+                    add_platform "windows-latest" "x64" "--x64" "--win" "windows-x86_64"
+                    add_platform "windows-latest" "arm64" "--arm64" "--win" "windows-aarch64"
+
+                  else
+
+                    ########################################
+                    # macOS
+                    ########################################
+
+                    [[ "$TAG" == *"mac-arm"* ]] && \
+                      add_platform "macos-latest" "arm64" "--arm64" "--mac" "macos-aarch64"
+
+                    [[ "$TAG" == *"mac-x64"* ]] && \
+                      add_platform "macos-latest" "x64" "--x64" "--mac" "macos-x86_64"
+
+                    ########################################
+                    # Linux
+                    ########################################
+
+                    [[ "$TAG" == *"linux-x64"* ]] && \
+                      add_platform "ubuntu-22.04" "x64" "--x64" "--linux" "linux-x86_64"
+
+                    [[ "$TAG" == *"linux-arm"* ]] && \
+                      add_platform "ubuntu-22.04" "arm64" "--arm64" "--linux" "linux-aarch64"
+
+                    ########################################
+                    # Windows
+                    ########################################
+
+                    [[ "$TAG" == *"win-x64"* ]] && \
+                      add_platform "windows-latest" "x64" "--x64" "--win" "windows-x86_64"
+
+                    [[ "$TAG" == *"win-arm"* ]] && \
+                      add_platform "windows-latest" "arm64" "--arm64" "--win" "windows-aarch64"
+
+                  fi
+
+                  echo "Generated Matrix:"
+                  echo "$MATRIX"
+
+                  echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+                  echo "$MATRIX" >> "$GITHUB_OUTPUT"
+                  echo "EOF" >> "$GITHUB_OUTPUT"
+
+            - name: Validate Matrix
+              run: |
+                  MATRIX='${{ steps.matrix.outputs.matrix }}'
+
+                  if [[ "$MATRIX" == '{"include":[]}' ]]; then
+                    echo "No build target found in tag."
+                    exit 1
+                  fi
+
     publish-electron:
+        needs: setup
+
         permissions:
             contents: write
 
         strategy:
             fail-fast: false
-            matrix:
-                include:
-                    # macOS 平台配置
-                    - platform: 'macos-latest'
-                      arch: 'arm64'
-                      build_args: '--arm64'
-                      electron_target: '--mac'
-                      artifact_name: 'macos-aarch64'
-                      enabled: ${{ github.event.inputs.build_macos_aarch64 == 'true' }}
-                    - platform: 'macos-latest'
-                      arch: 'x64'
-                      build_args: '--x64'
-                      electron_target: '--mac'
-                      artifact_name: 'macos-x86_64'
-                      enabled: ${{ github.event.inputs.build_macos_x86_64 == 'true' }}
-
-                    # Linux 平台配置
-                    - platform: 'ubuntu-22.04'
-                      arch: 'x64'
-                      build_args: '--x64'
-                      electron_target: '--linux'
-                      artifact_name: 'linux-x86_64'
-                      enabled: ${{ github.event.inputs.build_linux_x86_64 == 'true' }}
-                    - platform: 'ubuntu-22.04'
-                      arch: 'arm64'
-                      build_args: '--arm64'
-                      electron_target: '--linux'
-                      artifact_name: 'linux-aarch64'
-                      enabled: ${{ github.event.inputs.build_linux_aarch64 == 'true' }}
-
-                    # Windows 平台配置
-                    - platform: 'windows-latest'
-                      arch: 'x64'
-                      build_args: '--x64'
-                      electron_target: '--win'
-                      artifact_name: 'windows-x86_64'
-                      enabled: ${{ github.event.inputs.build_windows_x86_64 == 'true' }}
-                    - platform: 'windows-latest'
-                      arch: 'arm64'
-                      build_args: '--arm64'
-                      electron_target: '--win'
-                      artifact_name: 'windows-aarch64'
-                      enabled: ${{ github.event.inputs.build_windows_aarch64 == 'true' }}
+            matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
         runs-on: ${{ matrix.platform }}
+
         timeout-minutes: 60
 
         steps:
             - name: Checkout Repository
-              if: ${{ matrix.enabled }}
               uses: actions/checkout@v4
 
             - name: Setup Node.js
-              if: ${{ matrix.enabled }}
               uses: actions/setup-node@v4
               with:
                   node-version: '18'
                   cache: 'npm'
 
             - name: Install dependencies
-              if: ${{ matrix.enabled }}
               run: npm ci
 
             - name: Install Linux build dependencies
-              if: ${{ matrix.enabled && matrix.platform == 'ubuntu-22.04'}}
+              if: matrix.platform == 'ubuntu-22.04'
               run: |
                   sudo apt-get update
-                  sudo apt-get install -y libgtk-3-dev libnss3-dev libasound2-dev libxss-dev libxtst-dev libnotify-dev libgconf-2-4 libgbm-dev
+                  sudo apt-get install -y \
+                    libgtk-3-dev \
+                    libnss3-dev \
+                    libasound2-dev \
+                    libxss-dev \
+                    libxtst-dev \
+                    libnotify-dev \
+                    libgconf-2-4 \
+                    libgbm-dev
 
             - name: Regenerate Icons
-              if: ${{ matrix.enabled }}
               run: npm run icon
 
             - name: Init Project Config
-              if: ${{ matrix.enabled }}
               run: node ./scripts/ppworker.cjs
 
-            - name: Build Electron app
-              if: ${{ matrix.enabled }}
-              run: npx electron-builder ${{ matrix.electron_target }} ${{ matrix.build_args }} --publish never
+            - name: Build Electron App
+              run: |
+                  npx electron-builder \
+                    ${{ matrix.electron_target }} \
+                    ${{ matrix.build_args }} \
+                    --publish never
 
             - name: Rename files
-              if: ${{ matrix.enabled && env.RENAME == 'true' }}
+              if: env.RENAME == 'true'
               shell: bash
               run: |
-                  PREFIX="${{ github.ref_name }}"
+                  PREFIX="${GITHUB_REF_NAME}"
+
                   echo "Prefix: $PREFIX"
 
-                  for file in dist/*.{exe,dmg,AppImage,deb,rpm,zip,tar.gz}; do
-                    [ -e "$file" ] || continue
+                  find dist -type f \
+                    \( \
+                    -name "*.exe" -o \
+                    -name "*.dmg" -o \
+                    -name "*.AppImage" -o \
+                    -name "*.deb" -o \
+                    -name "*.rpm" -o \
+                    -name "*.zip" -o \
+                    -name "*.tar.gz" \
+                    \) | while read file
+                  do
                     dir=$(dirname "$file")
                     base=$(basename "$file")
-                    new_file="$dir/$PREFIX-$base"
 
-                    mv "$file" "$new_file"
-                    echo "Rename: $file -> $new_file"
+                    mv "$file" "$dir/$PREFIX-$base"
+
+                    echo "Renamed: $base"
                   done
 
             - name: Upload artifacts
-              if: ${{ matrix.enabled }}
               uses: actions/upload-artifact@v4
               with:
                   name: ${{ env.NAME }}-${{ matrix.artifact_name }}
@@ -156,10 +202,10 @@ jobs:
                       dist/*.zip
                       dist/*.tar.gz
                       !dist/*.yml
+                      !dist/*.yaml
                       !dist/*.json
 
             - name: Create GitHub Release
-              if: ${{ matrix.enabled }}
               uses: softprops/action-gh-release@v2
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
